@@ -13,12 +13,14 @@ local nodelay = false
 
 local connection = {}
 
+
+-- 当接受一个客户连接时，需要显示的调用此函数，socketdriver.start会将此fd加入监听逻辑中
 function gateserver.openclient(fd)
 	if connection[fd] then
 		socketdriver.start(fd)
 	end
 end
-
+-- 主动关闭一个客户连接
 function gateserver.closeclient(fd)
 	local c = connection[fd]
 	if c then
@@ -27,10 +29,13 @@ function gateserver.closeclient(fd)
 	end
 end
 
+
 function gateserver.start(handler)
 	assert(handler.message)
 	assert(handler.connect)
 
+	-- gateserver服务的"open"命令方法实现，监听conf.address:conf.port 
+	-- 如果提供了handler.open方法，则会被调用	
 	function CMD.open( source, conf )
 		assert(not socket)
 		local address = conf.address or "0.0.0.0"
@@ -45,6 +50,7 @@ function gateserver.start(handler)
 		end
 	end
 
+	-- 关闭监听套接字	
 	function CMD.close()
 		assert(socket)
 		socketdriver.close(socket)
@@ -52,6 +58,7 @@ function gateserver.start(handler)
 
 	local MSG = {}
 
+	-- 当收到数据刚刚好是一个完整数据包时调用此函数，将数据包交由用户提供的handler.message处理
 	local function dispatch_msg(fd, msg, sz)
 		if connection[fd] then
 			handler.message(fd, msg, sz)
@@ -62,6 +69,7 @@ function gateserver.start(handler)
 
 	MSG.data = dispatch_msg
 
+	-- 当收到的数据大于一个完整包长度时调用此方法
 	local function dispatch_queue()
 		local fd, msg, sz = netpack.pop(queue)
 		if fd then
@@ -78,6 +86,7 @@ function gateserver.start(handler)
 
 	MSG.more = dispatch_queue
 
+	-- 接受一个新连接时的回调函数，函数中会调用用户提供handler.connect函数，参数为fd和ip地址
 	function MSG.open(fd, msg)
 		if client_number >= maxclient then
 			socketdriver.close(fd)
@@ -99,6 +108,7 @@ function gateserver.start(handler)
 		end
 	end
 
+	--客户关闭连接时的回调函数，	函数中会调用用户提供handler.disconnect函数
 	function MSG.close(fd)
 		if fd ~= socket then
 			if handler.disconnect then
@@ -128,6 +138,8 @@ function gateserver.start(handler)
 		end
 	end
 
+	-- 注册skynet.PTYPE_SOCKET套接字类型的消息处理方法，skynet在收到套接字的相关消息时，会调用这里定义的
+	-- dispatch函数，然后根据消息类型type调用消息处理方法MSG[type]
 	skynet.register_protocol {
 		name = "socket",
 		id = skynet.PTYPE_SOCKET,	-- PTYPE_SOCKET = 6
@@ -142,6 +154,8 @@ function gateserver.start(handler)
 		end
 	}
 
+	-- 此服务的lua协议处理方法，此服务只提供了open和close命令，分别用于启用监听套接字和关闭监听套接字
+	-- 其他命令可交由用户提供的handler.command进行处理
 	skynet.start(function()
 		skynet.dispatch("lua", function (_, address, cmd, ...)
 			local f = CMD[cmd]
@@ -155,3 +169,8 @@ function gateserver.start(handler)
 end
 
 return gateserver
+
+--[[
+使用方法：参见gate.lua里的使用
+此服务提供最基本的套接字监听，消息组装成长度+消息体的组包服务，将一个个消息包进行分发处理
+--]]
